@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>TV Sizer</title>
+<style>
+  :root{ --ink:#eef2f4; --dim:#93a2ab; --bg:#0a0d10; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
+    overscroll-behavior:none;touch-action:none;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+
+  #gate{position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;justify-content:flex-end;gap:16px;
+    padding:32px 26px calc(48px + env(safe-area-inset-bottom));
+    background:radial-gradient(130% 75% at 50% 100%,#121a22 0%,#0a0d10 72%)}
+  #gate h1{margin:0;font-size:29px;line-height:1.1;font-weight:620;letter-spacing:-.02em;max-width:15ch}
+  #gate p{margin:0;color:var(--dim);font-size:15px;line-height:1.5;max-width:35ch}
+  #start{margin-top:8px;align-self:flex-start;border:0;border-radius:999px;padding:15px 30px;
+    font:inherit;font-size:16px;font-weight:600;background:var(--ink);color:#0a0d10}
+  #gate small{color:#5f6d76;font-size:12.5px;line-height:1.5;max-width:36ch}
+
+  #hud{position:fixed;top:calc(14px + env(safe-area-inset-top));left:16px;right:16px;
+    display:flex;justify-content:space-between;gap:14px;font-size:13px;pointer-events:none;
+    text-shadow:0 1px 4px rgba(0,0,0,.85)}
+  #state{max-width:19ch;line-height:1.4}
+  #dims{text-align:right;line-height:1.45}
+  #dims b{font-weight:600;font-size:15px}
+  #dims span{color:var(--dim)}
+
+  #bar{position:fixed;left:0;right:0;bottom:0;padding:0 14px calc(18px + env(safe-area-inset-bottom));
+    display:flex;flex-direction:column;align-items:center;gap:13px}
+  #sizes{display:flex;gap:6px;padding:6px;border-radius:999px;background:rgba(11,15,19,.66);
+    border:1px solid rgba(255,255,255,.11);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}

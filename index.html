@@ -37,3 +37,398 @@
   #fail{position:fixed;left:14px;right:14px;top:calc(52px + env(safe-area-inset-top));z-index:50;
     display:none;padding:14px 16px;border-radius:14px;background:rgba(40,12,16,.92);
     border:1px solid rgba(255,107,138,.5);color:#ffd9e0;font-size:13px;line-height:1.5;
+    -webkit-user-select:text;user-select:text}
+
+  #bar{position:fixed;left:0;right:0;bottom:0;z-index:10;
+    padding:0 14px calc(18px + env(safe-area-inset-bottom));
+    display:flex;flex-direction:column;align-items:center;gap:13px}
+  #sizes{display:flex;gap:6px;padding:6px;border-radius:999px;background:rgba(11,15,19,.66);
+    border:1px solid rgba(255,255,255,.11);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  #sizes[hidden]{display:none}
+  .chip{border:0;background:transparent;color:var(--dim);font:inherit;font-size:15px;font-weight:600;
+    padding:11px 16px;border-radius:999px;transition:background .14s,color .14s}
+  .chip[aria-pressed="true"]{background:rgba(255,255,255,.14);color:var(--ink)}
+  .chip[data-size="77"][aria-pressed="true"]{color:#ffc24a}
+  .chip[data-size="83"][aria-pressed="true"]{color:#ff6b8a}
+  .chip[data-size="custom"][aria-pressed="true"]{color:#5fd6c4}
+
+  #acts{display:flex;gap:10px;align-items:center}
+  .btn{border:1px solid rgba(255,255,255,.16);background:rgba(11,15,19,.66);color:var(--ink);
+    font:inherit;font-size:14px;font-weight:600;padding:12px 22px;border-radius:999px;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--dim);font-weight:400;padding:12px 12px}
+  .btn.on{color:#ffc24a}
+  #customIn{width:92px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);
+    color:var(--ink);font:inherit;font-size:14px;padding:11px 12px;border-radius:999px;text-align:center}
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline autoplay muted></video>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div id="state"></div>
+  <div id="dims"></div>
+</div>
+
+<div id="fail"></div>
+<div id="bar">
+  <div id="sizes" hidden>
+    <button class="chip" data-size="65" aria-pressed="true">65</button>
+    <button class="chip" data-size="77" aria-pressed="false">77</button>
+    <button class="chip" data-size="83" aria-pressed="false">83</button>
+    <button class="chip" data-size="custom" aria-pressed="false" hidden>—</button>
+  </div>
+  <div id="acts">
+    <input type="number" id="customIn" inputmode="decimal" min="30" max="120" step="1" placeholder="other" hidden>
+    <button class="btn ghost" id="adjustBtn" hidden>Move markers</button>
+    <button class="btn" id="lockBtn" hidden>Lock on</button>
+    <button class="btn ghost" id="holdBtn" hidden>Hold</button>
+  </div>
+</div>
+
+<div id="gate">
+  <h1>See a bigger telly on your own wall</h1>
+  <p>Drag four markers onto the corners of your screen, then switch between 65, 77 and 83 inches. The outline sits on the same wall plane in correct perspective and follows the telly as you move.</p>
+  <button id="start">Turn on the camera</button>
+  <small>Your current screen has to be lit for the markers to hold. Nothing leaves your phone.</small>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+var failEl = document.getElementById('fail');
+function fail(msg){ failEl.textContent = msg; failEl.style.display = 'block'; }
+window.addEventListener('error', function(e){ fail('Script error: ' + e.message + '  (line ' + e.lineno + ')'); });
+window.addEventListener('unhandledrejection', function(e){ fail('Unhandled: ' + (e.reason && e.reason.message || e.reason)); });
+
+var REF = 65, RT = Math.sqrt(337);
+function dims(inch){ var d = inch * 2.54; return { w: d*16/RT, h: d*9/RT }; }
+
+var video  = document.getElementById('cam');
+var canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+var dpr = 1;
+
+var BW = 320, BH = 0, ready = false;
+var buf = document.createElement('canvas');
+var bctx = buf.getContext('2d', { willReadFrequently: true });
+var gray = null;
+
+var R = 6, RAD = 10, PW = R*2+1, PN = PW*PW;
+
+var S = {
+  mode:'aim', size:65, custom:null, hold:false,
+  pts:null, vel:[[0,0],[0,0],[0,0],[0,0]],
+  patches:[null,null,null,null], quality:[0,0,0,0], drag:-1,
+  waited:0
+};
+
+ /* ---------------- camera ---------------- */
+document.getElementById('start').addEventListener('click', function(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    return gateFail('No camera API',
+      'This browser has not exposed a camera. The page must be served over https — check the address starts with https:// — and opened in Safari or Chrome directly.');
+  }
+  navigator.mediaDevices.getUserMedia({
+    audio:false,
+    video:{ facingMode:{ ideal:'environment' }, width:{ ideal:1280 }, height:{ ideal:720 } }
+  }).then(function(st){
+    video.srcObject = st;
+    return video.play();
+  }).then(function(){
+    document.getElementById('gate').style.display = 'none';
+    ['lockBtn','holdBtn'].forEach(function(id){ document.getElementById(id).hidden = false; });
+    resize();
+    requestAnimationFrame(loop);
+  }).catch(function(e){
+    gateFail('The camera stayed shut',
+      'The browser refused access (' + e.name + ': ' + (e.message||'') + '). Serve the page over https, open it in Safari or Chrome itself rather than inside another app, and allow the camera when prompted.');
+  });
+});
+function gateFail(title, body){
+  var g = document.getElementById('gate');
+  g.querySelector('h1').textContent = title;
+  g.querySelector('p').textContent = body;
+  document.getElementById('start').textContent = 'Try again';
+}
+
+function init(){
+  BH = Math.round(BW * video.videoHeight / video.videoWidth);
+  if (!BH || !isFinite(BH)) return false;
+  buf.width = BW; buf.height = BH;
+  gray = new Float32Array(BW*BH);
+  var w = BW*0.46, h = w*9/16, cx = BW/2, cy = BH/2;
+  S.pts = [[cx-w/2,cy-h/2],[cx+w/2,cy-h/2],[cx+w/2,cy+h/2],[cx-w/2,cy+h/2]];
+  ready = true;
+  return true;
+}
+
+function resize(){
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width  = Math.round(innerWidth  * dpr);
+  canvas.height = Math.round(innerHeight * dpr);
+}
+addEventListener('resize', resize);
+addEventListener('orientationchange', function(){ setTimeout(resize, 300); });
+
+ /* all overlay maths happens in CSS pixels */
+function cover(){
+  var s = Math.max(innerWidth/video.videoWidth, innerHeight/video.videoHeight);
+  return { s:s, dx:(innerWidth - video.videoWidth*s)/2, dy:(innerHeight - video.videoHeight*s)/2 };
+}
+function b2c(p, cv){ var k = video.videoWidth/BW;
+  return [ p[0]*k*cv.s + cv.dx, p[1]*k*cv.s + cv.dy ]; }
+function c2b(x, y, cv){ var k = video.videoWidth/BW;
+  return [ (x - cv.dx)/cv.s/k, (y - cv.dy)/cv.s/k ]; }
+
+/* ---------------- tracking ---------------- */
+function readGray(){
+  bctx.drawImage(video, 0, 0, BW, BH);
+  var d = bctx.getImageData(0,0,BW,BH).data;
+  for (var i = 0, n = BW*BH; i < n; i++)
+    gray[i] = d[i*4]*0.30 + d[i*4+1]*0.59 + d[i*4+2]*0.11;
+}
+function grab(cx, cy){
+  var x0 = Math.round(cx)-R, y0 = Math.round(cy)-R;
+  if (x0 < 0 || y0 < 0 || x0+PW > BW || y0+PW > BH) return null;
+  var p = new Float32Array(PN), s = 0, i = 0;
+  for (var y = 0; y < PW; y++) for (var x = 0; x < PW; x++){
+    var v = gray[(y0+y)*BW + x0+x]; p[i++] = v; s += v;
+  }
+  var m = s/PN; for (i = 0; i < PN; i++) p[i] -= m;
+  return p;
+}
+function score(p, x0, y0){
+  if (x0 < 0 || y0 < 0 || x0+PW > BW || y0+PW > BH) return 1e18;
+  var s = 0, i, x, y;
+  for (y = 0; y < PW; y++) for (x = 0; x < PW; x++) s += gray[(y0+y)*BW + x0+x];
+  var m = s/PN, acc = 0; i = 0;
+  for (y = 0; y < PW; y++) for (x = 0; x < PW; x++){
+    var d = (gray[(y0+y)*BW + x0+x] - m) - p[i++];
+    acc += d < 0 ? -d : d;
+  }
+  return acc/PN;
+}
+function follow(){
+  for (var k = 0; k < 4; k++){
+    var p = S.patches[k]; if (!p) continue;
+    var bx = Math.round(S.pts[k][0] + S.vel[k][0]*0.7),
+        by = Math.round(S.pts[k][1] + S.vel[k][1]*0.7);
+    var best = 1e18, fx = bx, fy = by;
+    for (var dy = -RAD; dy <= RAD; dy++) for (var dx = -RAD; dx <= RAD; dx++){
+      var s = score(p, bx+dx-R, by+dy-R);
+      if (s < best){ best = s; fx = bx+dx; fy = by+dy; }
+    }
+    S.quality[k] = best;
+    if (best < 26){
+      S.vel[k] = [ fx - S.pts[k][0], fy - S.pts[k][1] ];
+      S.pts[k] = [ fx, fy ];
+      if (best < 12){
+        var fresh = grab(fx, fy);
+        if (fresh) for (var i = 0; i < PN; i++) p[i] = p[i]*0.88 + fresh[i]*0.12;
+      }
+    } else {
+      S.vel[k] = [ S.vel[k][0]*0.5, S.vel[k][1]*0.5 ];
+      S.pts[k] = [ S.pts[k][0] + S.vel[k][0], S.pts[k][1] + S.vel[k][1] ];
+    }
+  }
+}
+function lost(){
+  var bad = 0; for (var i = 0; i < 4; i++) if (S.quality[i] >= 26) bad++;
+  return bad >= 3;
+}
+
+ /* ---------------- homography: unit square -> quad ---------------- */
+function solveH(q){
+  var src = [[0,0],[1,0],[1,1],[0,1]], A = [], b = [], i, j, r;
+  for (i = 0; i < 4; i++){
+    var u = src[i][0], v = src[i][1], x = q[i][0], y = q[i][1];
+    A.push([u,v,1,0,0,0,-u*x,-v*x]); b.push(x);
+    A.push([0,0,0,u,v,1,-u*y,-v*y]); b.push(y);
+  }
+  for (i = 0; i < 8; i++){
+    var pv = i;
+    for (r = i+1; r < 8; r++) if (Math.abs(A[r][i]) > Math.abs(A[pv][i])) pv = r;
+    if (Math.abs(A[pv][i]) < 1e-9) return null;
+    var t = A[i]; A[i] = A[pv]; A[pv] = t;
+    var tb = b[i]; b[i] = b[pv]; b[pv] = tb;
+    for (r = i+1; r < 8; r++){
+      var f = A[r][i]/A[i][i]; if (!f) continue;
+      for (j = i; j < 8; j++) A[r][j] -= f*A[i][j];
+      b[r] -= f*b[i];
+    }
+  }
+  var h = new Array(8);
+  for (i = 7; i >= 0; i--){
+    var s = b[i]; for (j = i+1; j < 8; j++) s -= A[i][j]*h[j];
+    h[i] = s/A[i][i];
+  }
+  return h;
+}
+function mapH(h,u,v){ var d = h[6]*u + h[7]*v + 1;
+  return [ (h[0]*u + h[1]*v + h[2])/d, (h[3]*u + h[4]*v + h[5])/d ]; }
+function quadFor(h, inch, cv){
+  var k = inch/REF, o = (1-k)/2;
+  return [[o,o],[1-o,o],[1-o,1-o],[o,1-o]].map(function(p){ return b2c(mapH(h,p[0],p[1]), cv); });
+}
+
+/* ---------------- drawing (CSS px) ---------------- */
+function path(pts){
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (var i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+}
+function outline(pts, col, w, dash){
+  ctx.save(); ctx.setLineDash(dash||[]); ctx.lineWidth = w; ctx.strokeStyle = col;
+  ctx.lineJoin = 'round'; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = w*3;
+  ctx.beginPath(); path(pts); ctx.stroke(); ctx.restore();
+}
+function corners(pts, col, u){
+  ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = u*1.2; ctx.lineCap = 'round';
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = u*3;
+  for (var i = 0; i < 4; i++){
+    var p = pts[i];
+    [pts[(i+3)%4], pts[(i+1)%4]].forEach(function(q){
+      var dx = q[0]-p[0], dy = q[1]-p[1], L = Math.hypot(dx,dy)||1, t = Math.min(u*7, L*0.26);
+      ctx.beginPath(); ctx.moveTo(p[0],p[1]); ctx.lineTo(p[0]+dx/L*t, p[1]+dy/L*t); ctx.stroke();
+    });
+  }
+  ctx.restore();
+}
+function handles(pts, u){
+  for (var i = 0; i < 4; i++){
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = u*4;
+    ctx.strokeStyle = '#eef2f4'; ctx.lineWidth = u*1.4;
+    ctx.beginPath(); ctx.arc(pts[i][0], pts[i][1], u*7, 0, 6.2832); ctx.stroke();
+    ctx.fillStyle = 'rgba(238,242,244,.9)';
+    ctx.beginPath(); ctx.arc(pts[i][0], pts[i][1], u*1.9, 0, 6.2832); ctx.fill();
+    ctx.restore();
+  }
+}
+  function loop(){
+  requestAnimationFrame(loop);
+  if (S.hold) return;
+
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+
+  if (!video.videoWidth){
+    if (++S.waited === 180)
+      fail('The camera is on but sending no frames. Close other apps or tabs using the camera, then reload.');
+    say('Waking the camera up');
+    return;
+  }
+  if (!ready && !init()) return;
+
+  var cv = cover(), u = innerWidth/380;
+  readGray();
+  if (S.mode === 'track') follow();
+
+  var disp = S.pts.map(function(p){ return b2c(p, cv); });
+
+  if (S.mode === 'aim'){
+    outline(disp, 'rgba(238,242,244,.75)', u*1.3, [u*4,u*4]);
+    handles(disp, u);
+    say('Put a marker on each corner of the picture, then lock on.');
+    document.getElementById('dims').innerHTML = '';
+    return;
+  }
+
+  var h = solveH(S.pts);
+  if (!h){ say('Markers folded over. Tap Move markers.'); return; }
+
+  var inch = S.size === 'custom' ? S.custom : S.size;
+  var col  = S.size === 77 ? '#ffc24a' : S.size === 83 ? '#ff6b8a'
+           : S.size === 'custom' ? '#5fd6c4' : '#eef2f4';
+
+  var here = quadFor(h, REF, cv);
+  if (inch !== REF){
+    var big = quadFor(h, inch, cv);
+    ctx.save(); ctx.globalAlpha = 0.17; ctx.fillStyle = col;
+    ctx.beginPath(); path(big); path(here); ctx.fill('evenodd'); ctx.restore();
+    outline(here, 'rgba(238,242,244,.45)', u*1.1, [u*4,u*4]);
+    outline(big, col, u*2.1); corners(big, col, u*1.7);
+  } else {
+    outline(here, col, u*1.8); corners(here, col, u*1.5);
+  }
+
+  say(lost() ? 'Lost the corners — tap Move markers.' : 'Holding the corners.');
+
+  var d = dims(inch), r = dims(REF);
+  document.getElementById('dims').innerHTML =
+    '<b>' + Math.round(d.w) + ' &times; ' + Math.round(d.h) + ' cm</b><br><span>' +
+    (inch === REF ? 'picture area now'
+      : '+' + ((d.w-r.w)/2).toFixed(0) + ' cm each side, +' + ((d.h-r.h)/2).toFixed(0) + ' cm above &amp; below') +
+    '</span>';
+}
+function say(t){ var e = document.getElementById('state'); if (e.textContent !== t) e.textContent = t; }
+
+/* ---------------- dragging ---------------- */
+canvas.addEventListener('pointerdown', function(e){
+  if (S.mode !== 'aim' || !S.pts) return;
+  var cv = cover(), near = -1, best = 1e9;
+  S.pts.forEach(function(p, i){
+    var q = b2c(p, cv), d = Math.hypot(q[0]-e.clientX, q[1]-e.clientY);
+    if (d < best){ best = d; near = i; }
+  });
+  if (best < innerWidth/6){ S.drag = near; canvas.setPointerCapture(e.pointerId); }
+});
+canvas.addEventListener('pointermove', function(e){
+  if (S.drag < 0) return;
+  var p = c2b(e.clientX, e.clientY, cover());
+  S.pts[S.drag] = [ Math.max(R+1, Math.min(BW-R-2, p[0])), Math.max(R+1, Math.min(BH-R-2, p[1])) ];
+});
+canvas.addEventListener('pointerup',     function(){ S.drag = -1; });
+canvas.addEventListener('pointercancel', function(){ S.drag = -1; });
+
+/* ---------------- buttons ---------------- */
+ var lockBtn = document.getElementById('lockBtn'),
+    adjBtn  = document.getElementById('adjustBtn'),
+    holdBtn = document.getElementById('holdBtn'),
+    sizes   = document.getElementById('sizes'),
+    custom  = document.getElementById('customIn');
+
+lockBtn.addEventListener('click', function(){
+  if (!ready) return fail('No frames yet — wait for the picture before locking on.');
+  for (var i = 0; i < 4; i++){
+    S.patches[i] = grab(S.pts[i][0], S.pts[i][1]);
+    S.vel[i] = [0,0]; S.quality[i] = 0;
+  }
+  S.mode = 'track';
+  lockBtn.hidden = true; adjBtn.hidden = false; sizes.hidden = false; custom.hidden = false;
+});
+adjBtn.addEventListener('click', function(){
+  S.mode = 'aim';
+  lockBtn.hidden = false; adjBtn.hidden = true; sizes.hidden = true; custom.hidden = true;
+});
+holdBtn.addEventListener('click', function(){
+  S.hold = !S.hold;
+  holdBtn.textContent = S.hold ? 'Resume' : 'Hold';
+  holdBtn.classList.toggle('on', S.hold);
+});
+sizes.addEventListener('click', function(e){
+  var b = e.target.closest('.chip'); if (!b) return;
+  S.size = b.dataset.size === 'custom' ? 'custom' : parseInt(b.dataset.size, 10);
+  [].forEach.call(sizes.querySelectorAll('.chip'), function(c){
+    c.setAttribute('aria-pressed', c === b ? 'true' : 'false');
+  });
+});
+custom.addEventListener('input', function(){
+  var v = parseFloat(this.value), chip = sizes.querySelector('.chip[data-size="custom"]');
+  if (v >= 30 && v <= 120){ S.custom = v; chip.hidden = false; chip.textContent = v; }
+  else {
+    chip.hidden = true;
+    if (S.size === 'custom'){
+      S.size = 65;
+      sizes.querySelector('.chip[data-size="65"]').setAttribute('aria-pressed','true');
+      chip.setAttribute('aria-pressed','false');
+    }
+  }
+});
+})();
+</script>
+</body>
+</html>
